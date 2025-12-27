@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbo",
+    "dev": "next dev",
+    "dev:turbo": "next dev --turbo",
     "build": "npm run build:docs && next build",
     "build:next": "next build",
     "build:docs": "cd docs && npm install && npm run build && mkdir -p ../public/docs && cp -r .vitepress/dist/* ../public/docs/",
@@ -23,7 +24,7 @@
     "graphql": "^16.11.0",
     "graphql-tag": "^2.12.6",
     "motion": "^12.23.12",
-    "next": "15.5.7",
+    "next": "^16.0.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-icons": "^5.5.0"
