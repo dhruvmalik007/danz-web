@@ -1,0 +1,19 @@
+services:
+  da3-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      platforms:
+        - linux/arm64
+    container_name: da3-fastapi
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./outputs:/app/outputs
+      - ./jobs:/app/jobs
+    environment:
+      - CUDA_VISIBLE_DEVICES=
+      - PYTHONUNBUFFERED=1
+      - BLA_VENDOR=OpenBLAS
+    restart: unless-stopped

@@ -1,157 +1,82 @@
 import { NextResponse } from 'next/server'
 
-const HF_ORIGIN = 'https://depth-anything-depth-anything-3.hf.space'
+const DA3_LOCAL_API = process.env.DA3_API_URL || 'http://localhost:8001'
 
 export async function POST(req: Request) {
-  let stage: 'parse_form' | 'upload_files' | 'run_handle_uploads' | 'parse_handle_uploads' = 'parse_form'
   try {
-    stage = 'parse_form'
     const form = await req.formData()
 
     const images = form.getAll('images').filter(v => v instanceof File) as File[]
     const video = (form.get('video') instanceof File ? form.get('video') : null) as File | null
     const samplingFpsRaw = form.get('samplingFps')
+    const showCamRaw = form.get('showCam')
+    const filterBlackBgRaw = form.get('filterBlackBg')
+    const filterWhiteBgRaw = form.get('filterWhiteBg')
+    const processResMethodRaw = form.get('processResMethod')
+    const savePercentageRaw = form.get('savePercentage')
+    const numMaxPointsRaw = form.get('numMaxPoints')
 
     const samplingFps = samplingFpsRaw ? Number(samplingFpsRaw) : 10
+    const showCam = showCamRaw ? showCamRaw === 'true' : true
+    const filterBlackBg = filterBlackBgRaw ? filterBlackBgRaw === 'true' : false
+    const filterWhiteBg = filterWhiteBgRaw ? filterWhiteBgRaw === 'true' : false
+    const processResMethod = (processResMethodRaw as 'high_res' | 'low_res') || 'low_res'
+    const savePercentage = savePercentageRaw ? Number(savePercentageRaw) : 10
+    const numMaxPoints = numMaxPointsRaw ? Number(numMaxPointsRaw) : 1000
 
     if (images.length === 0 && !video) {
       return NextResponse.json({ error: 'No images or video provided' }, { status: 400 })
     }
 
-    const uploadOne = async (file: File) => {
-      const tryUpload = async (fieldName: 'files' | 'file') => {
-        const up = new FormData()
-        up.append(fieldName, file)
+    // Create FormData for the local DA3 API
+    const da3Form = new FormData()
 
-        const res = await fetch(`${HF_ORIGIN}/gradio_api/upload`, {
-          method: 'POST',
-          body: up,
-        })
+    // Determine job type
+    const jobType = video ? 'video' : 'image'
 
-        if (!res.ok) {
-          const text = await res.text()
-          return {
-            ok: false as const,
-            status: res.status,
-            text,
-          }
-        }
+    da3Form.append('job_type', jobType)
+    da3Form.append('sampling_fps', String(samplingFps))
+    da3Form.append('show_cam', String(showCam))
+    da3Form.append('filter_black_bg', String(filterBlackBg))
+    da3Form.append('filter_white_bg', String(filterWhiteBg))
+    da3Form.append('process_res_method', processResMethod)
+    da3Form.append('save_percentage', String(savePercentage))
+    da3Form.append('num_max_points', String(numMaxPoints))
+    da3Form.append('infer_gs', 'false')
+    da3Form.append('gs_trj_mode', 'smooth')
+    da3Form.append('gs_video_quality', 'low')
 
-        const json = (await res.json()) as any
-        return {
-          ok: true as const,
-          json,
-        }
-      }
-
-      const attempt1 = await tryUpload('files')
-      const attempt2 = attempt1.ok ? attempt1 : await tryUpload('file')
-
-      if (!attempt2.ok) {
-        throw new Error(
-          `Upload failed: ${attempt2.status} ${attempt2.text}`,
-        )
-      }
-
-      const raw = attempt2.json
-
-      if (typeof raw === 'string') {
-        return {
-          path: raw,
-          url: null,
-          orig_name: file.name,
-          mime_type: file.type || null,
-        }
-      }
-
-      if (Array.isArray(raw) && typeof raw[0] === 'string') {
-        return {
-          path: raw[0],
-          url: null,
-          orig_name: file.name,
-          mime_type: file.type || null,
-        }
-      }
-
-      const json = Array.isArray(raw) ? raw[0] : raw
-
-      if (!json?.path || typeof json.path !== 'string') {
-        throw new Error(`Upload returned unexpected payload: ${JSON.stringify(raw)}`)
-      }
-
-      return json as {
-        path: string
-        url?: string | null
-        orig_name?: string | null
-        mime_type?: string | null
-      }
+    // Add files
+    if (jobType === 'image') {
+      images.forEach(img => da3Form.append('images', img))
+    } else {
+      da3Form.append('video', video!)
     }
 
-    stage = 'upload_files'
-    const uploadedImages = await Promise.all(images.map(uploadOne))
-    const uploadedVideo = video ? await uploadOne(video) : null
-
-    const inputImages = uploadedImages.map(f => ({
-      path: f.path,
-      url: f.url ?? null,
-      orig_name: f.orig_name ?? null,
-      mime_type: (f as any).mime_type ?? null,
-      meta: { _type: 'gradio.FileData' },
-    }))
-
-    const inputVideo = uploadedVideo
-      ? {
-          video: {
-            path: uploadedVideo.path,
-            url: uploadedVideo.url ?? null,
-            orig_name: uploadedVideo.orig_name ?? null,
-            mime_type: (uploadedVideo as any).mime_type ?? null,
-            meta: { _type: 'gradio.FileData' },
-          },
-        }
-      : undefined
-
-    const payload: Record<string, unknown> = {
-      input_images: inputImages,
-      s_time_interval: samplingFps,
-    }
-
-    if (inputVideo) {
-      payload.input_video = inputVideo
-    }
-
-    stage = 'run_handle_uploads'
-    const runRes = await fetch(`${HF_ORIGIN}/gradio_api/run/handle_uploads`, {
+    // Call local DA3 API
+    const response = await fetch(`${DA3_LOCAL_API}/api/da3/jobs`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: da3Form,
     })
 
-    if (!runRes.ok) {
-      const text = await runRes.text()
-      throw new Error(`handle_uploads failed: ${runRes.status} ${text}`)
+    if (!response.ok) {
+      const text = await response.text()
+      throw new Error(`DA3 API failed: ${response.status} ${text}`)
     }
 
-    stage = 'parse_handle_uploads'
-    const runJson = (await runRes.json()) as {
-      output?: any
-      output_1?: any
-      output_2?: any
-      output_3?: any
-    }
+    const result = await response.json()
 
+    // Return job info for tracking
     return NextResponse.json({
-      model3d: runJson.output,
-      targetDir: runJson.output_1,
-      preview: runJson.output_2,
-      log: runJson.output_3,
+      job_id: result.job_id,
+      status: result.status,
+      message: result.message,
     })
   } catch (err: any) {
-    console.error('Depth-Anything upload route failed:', { stage, err })
+    console.error('Depth-Anything upload route failed:', err)
     return NextResponse.json(
       {
         error: err?.message || 'Upload failed',
-        stage,
       },
       { status: 500 },
     )

@@ -1,29 +1,21 @@
 'use client'
 
-import { depthAnythingApi, type DepthAnythingReconstructOptions, type Job } from '@/src/services/depth-anything/api'
-import { useEffect, useMemo, useState, useRef } from 'react'
+import { da3LocalApi, type DA3Job, type DA3ReconstructOptions } from '@/src/services/da3-local/api'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { FiImage, FiTrash2, FiUpload, FiVideo, FiZap } from 'react-icons/fi'
 
-export default function DepthAnythingDashboard() {
+export default function DepthAnythingDashboardLocal() {
   const [images, setImages] = useState<File[]>([])
   const [video, setVideo] = useState<File | null>(null)
   const [samplingFps, setSamplingFps] = useState<number>(10)
 
-  const [jobId, setJobId] = useState<string | null>(null)
-  const [jobStatus, setJobStatus] = useState<Job | null>(null)
-  const [log, setLog] = useState<string>('')
+  const [currentJob, setCurrentJob] = useState<DA3Job | null>(null)
+  const [logs, setLogs] = useState<string>('')
 
   const [isUploading, setIsUploading] = useState(false)
-  const [isReconstructing, setIsReconstructing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const [hasReconstructed, setHasReconstructed] = useState(false)
-
-  const [rgbUrl, setRgbUrl] = useState<string | null>(null)
-  const [depthUrl, setDepthUrl] = useState<string | null>(null)
-  const [model3dUrl, setModel3dUrl] = useState<string | null>(null)
-
-  const [options, setOptions] = useState<DepthAnythingReconstructOptions>({
+  const [options, setOptions] = useState<DA3ReconstructOptions>({
     show_cam: true,
     filter_black_bg: false,
     filter_white_bg: false,
@@ -35,64 +27,13 @@ export default function DepthAnythingDashboard() {
     gs_video_quality: 'low',
   })
 
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const logsEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    return () => {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current)
-      }
+    if (logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' })
     }
-  }, [])
-
-  const startPolling = (id: string) => {
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current)
-    }
-
-    pollingIntervalRef.current = setInterval(async () => {
-      try {
-        const status = await depthAnythingApi.getJobStatus(id)
-        setJobStatus(status)
-
-        if (status.logs && status.logs.length > 0) {
-          const logMessages = status.logs.map((log: any) =>
-            typeof log === 'string' ? log : log.message || JSON.stringify(log)
-          )
-          setLog(logMessages.join('\n'))
-        }
-
-        if (status.status === 'completed') {
-          if (pollingIntervalRef.current) {
-            clearInterval(pollingIntervalRef.current)
-            pollingIntervalRef.current = null
-          }
-          setIsReconstructing(false)
-          setHasReconstructed(true)
-
-          // Fetch output files
-          if (status.result?.files) {
-            const glbFile = status.result.files.find(f => f.endsWith('.glb'))
-            const rgbFile = status.result.files.find(f => f.includes('rgb') || f.endsWith('.png'))
-            const depthFile = status.result.files.find(f => f.includes('depth') || f.endsWith('.png'))
-
-            if (glbFile) setModel3dUrl(`/api/da3/jobs/${id}/outputs/${glbFile}`)
-            if (rgbFile) setRgbUrl(`/api/da3/jobs/${id}/outputs/${rgbFile}`)
-            if (depthFile) setDepthUrl(`/api/da3/jobs/${id}/outputs/${depthFile}`)
-          }
-        } else if (status.status === 'failed') {
-          if (pollingIntervalRef.current) {
-            clearInterval(pollingIntervalRef.current)
-            pollingIntervalRef.current = null
-          }
-          setIsReconstructing(false)
-          setError(status.error || 'Processing failed')
-        }
-      } catch (err: any) {
-        console.error('Failed to poll job status:', err)
-      }
-    }, 2000)
-  }
+  }, [logs])
 
   const imagePreviews = useMemo(() => {
     return images.map(file => ({
@@ -109,29 +50,22 @@ export default function DepthAnythingDashboard() {
   const handleSelectImages = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? [])
     setImages(files)
+    setVideo(null)
     setError(null)
-    setJobId(null)
-    setJobStatus(null)
-    setLog('')
-    setRgbUrl(null)
-    setDepthUrl(null)
-    setModel3dUrl(null)
-    setHasReconstructed(false)
+    setCurrentJob(null)
+    setLogs('')
   }
 
   const handleSelectVideo = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] ?? null
     setVideo(file)
+    setImages([])
     setError(null)
-    setJobId(null)
-    setJobStatus(null)
-    setLog('')
-    setRgbUrl(null)
-    setDepthUrl(null)
-    setModel3dUrl(null)
+    setCurrentJob(null)
+    setLogs('')
   }
 
-  const handlePrepare = async () => {
+  const handleStartJob = async () => {
     setError(null)
 
     if (images.length === 0 && !video) {
@@ -141,78 +75,79 @@ export default function DepthAnythingDashboard() {
 
     try {
       setIsUploading(true)
-      const result = await depthAnythingApi.prepare({
-        images,
+      setLogs('Creating job...\n')
+
+      const result = await da3LocalApi.createJob({
+        images: images.length > 0 ? images : undefined,
         video,
+        jobType: images.length > 0 ? 'image' : 'video',
         samplingFps,
         options,
       })
 
-      setJobId(result.job_id)
-      setLog(`Job created: ${result.job_id}\n${result.message}`)
-      setHasReconstructed(false)
+      setLogs(prev => prev + `Job created: ${result.job_id}\n`)
+      
+      // Start streaming logs
+      const cleanup = await da3LocalApi.streamJobLogs(
+        result.job_id,
+        (job) => {
+          setCurrentJob(job)
+          
+          // Update logs
+          const logMessages = job.logs.map(
+            (log) => `[${new Date(log.timestamp).toLocaleTimeString()}] ${log.message}`
+          )
+          setLogs(logMessages.join('\n'))
+        },
+        (err) => {
+          setError(err)
+          setLogs(prev => prev + `\nError: ${err}\n`)
+        },
+        () => {
+          setIsUploading(false)
+        }
+      )
 
-      // Start polling for job status
-      startPolling(result.job_id)
-      setIsReconstructing(true)
+      // Store cleanup function
+      return cleanup
     } catch (err: any) {
-      setError(err?.message || 'Failed to upload inputs.')
-    } finally {
+      setError(err?.message || 'Failed to create job.')
+      setLogs(prev => prev + `\nError: ${err?.message}\n`)
       setIsUploading(false)
-    }
-  }
-
-  const handleReconstruct = async () => {
-    setError(null)
-
-    if (!jobId) {
-      setError('Please upload inputs first.')
-      return
-    }
-
-    // Start polling if not already running
-    if (!isReconstructing) {
-      startPolling(jobId)
-      setIsReconstructing(true)
     }
   }
 
   const handleClear = async () => {
     setError(null)
-
-    try {
-      await depthAnythingApi.clear()
-    } catch (err: any) {
-      setError(err?.message || 'Failed to clear remote state.')
-    }
-
     setImages([])
     setVideo(null)
-    setJobId(null)
-    setJobStatus(null)
-    setLog('')
-    setRgbUrl(null)
-    setDepthUrl(null)
-    setModel3dUrl(null)
-    setHasReconstructed(false)
+    setCurrentJob(null)
+    setLogs('')
+  }
 
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current)
-      pollingIntervalRef.current = null
+  const handleDeleteJob = async () => {
+    if (!currentJob) return
+
+    try {
+      await da3LocalApi.deleteJob(currentJob.job_id)
+      setCurrentJob(null)
+      setLogs('')
+    } catch (err: any) {
+      setError(err?.message || 'Failed to delete job.')
     }
   }
 
   const step = isUploading
-    ? 'uploading'
-    : isReconstructing
-      ? 'reconstructing'
-      : jobId
-        ? hasReconstructed
-          ? 'done'
-          : 'ready'
-        : 'idle'
+    ? 'processing'
+    : currentJob
+      ? currentJob.status === 'completed'
+        ? 'done'
+        : currentJob.status === 'failed'
+          ? 'failed'
+          : 'processing'
+      : 'idle'
 
-  const stepOrder = ['uploading', 'ready', 'reconstructing', 'done'] as const
+  const stepOrder = ['idle', 'processing', 'done', 'failed'] as const
   const activeIndex = stepOrder.indexOf(step as any)
 
   return (
@@ -221,7 +156,7 @@ export default function DepthAnythingDashboard() {
         <div className="flex items-start justify-between gap-4 mb-6">
           <div>
             <h1 className="text-3xl md:text-4xl font-display font-bold text-text-primary">
-              Depth-Anything Model
+              Depth-Anything Model (Local)
             </h1>
             <p className="text-text-secondary mt-2">
               Upload images or a video, then run reconstruction to generate a point cloud + depth.
@@ -233,10 +168,10 @@ export default function DepthAnythingDashboard() {
           <div className="grid grid-cols-4 gap-2">
             {(
               [
-                { key: 'uploading', label: 'Uploading' },
-                { key: 'ready', label: 'Ready' },
-                { key: 'reconstructing', label: 'Reconstructing' },
+                { key: 'idle', label: 'Idle' },
+                { key: 'processing', label: 'Processing' },
                 { key: 'done', label: 'Done' },
+                { key: 'failed', label: 'Failed' },
               ] as const
             ).map((s, idx) => {
               const isActive = activeIndex !== -1 && idx === activeIndex
@@ -279,7 +214,7 @@ export default function DepthAnythingDashboard() {
                       multiple
                       className="hidden"
                       onChange={handleSelectImages}
-                      disabled={isUploading || isReconstructing}
+                      disabled={isUploading}
                     />
                   </label>
                   {imagePreviews.length > 0 && (
@@ -308,7 +243,7 @@ export default function DepthAnythingDashboard() {
                       accept="video/*"
                       className="hidden"
                       onChange={handleSelectVideo}
-                      disabled={isUploading || isReconstructing}
+                      disabled={isUploading}
                     />
                   </label>
                   {videoPreview && (
@@ -334,7 +269,7 @@ export default function DepthAnythingDashboard() {
                     value={samplingFps}
                     onChange={e => setSamplingFps(Number(e.target.value))}
                     className="w-full px-3 py-2 rounded-lg bg-bg-primary/40 border border-white/10 text-text-primary"
-                    disabled={isUploading || isReconstructing}
+                    disabled={isUploading}
                   />
                   <p className="text-xs text-text-muted mt-2">Higher FPS means more frames sampled.</p>
                 </div>
@@ -343,31 +278,41 @@ export default function DepthAnythingDashboard() {
                   <button
                     type="button"
                     className="btn btn-primary flex-1"
-                    onClick={handlePrepare}
-                    disabled={isUploading || isReconstructing}
+                    onClick={handleStartJob}
+                    disabled={isUploading}
                   >
-                    {isUploading ? 'Uploading...' : 'Upload'}
+                    {isUploading ? 'Processing...' : 'Start Job'}
                   </button>
                   <button
                     type="button"
                     className="btn btn-outline"
                     onClick={handleClear}
-                    disabled={isUploading || isReconstructing}
+                    disabled={isUploading}
                   >
                     <FiTrash2 />
                   </button>
                 </div>
 
-                {jobId && (
-                  <div className="text-xs text-text-muted break-all">
-                    <span className="text-text-secondary">Job ID:</span> {jobId}
-                  </div>
-                )}
-
-                {jobStatus && (
-                  <div className="text-xs text-text-muted">
-                    <span className="text-text-secondary">Status:</span> {jobStatus.status}
-                    {jobStatus.progress > 0 && ` (${Math.round(jobStatus.progress)}%)`}
+                {currentJob && (
+                  <div className="mt-4 p-3 bg-bg-primary/40 rounded-lg">
+                    <div className="text-xs text-text-muted mb-2">Job ID: {currentJob.job_id}</div>
+                    <div className="text-xs text-text-muted mb-2">
+                      Progress: {Math.round(currentJob.progress * 100)}%
+                    </div>
+                    <div className="w-full bg-bg-card rounded-full h-2">
+                      <div
+                        className="bg-neon-purple h-2 rounded-full transition-all"
+                        style={{ width: `${currentJob.progress * 100}%` }}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleDeleteJob}
+                      disabled={isUploading}
+                      className="mt-2 text-xs text-red-400 hover:text-red-300"
+                    >
+                      Delete Job
+                    </button>
                   </div>
                 )}
 
@@ -387,7 +332,7 @@ export default function DepthAnythingDashboard() {
                     type="checkbox"
                     checked={!!options.show_cam}
                     onChange={e => setOptions(o => ({ ...o, show_cam: e.target.checked }))}
-                    disabled={isUploading || isReconstructing}
+                    disabled={isUploading}
                   />
                   Show Camera
                 </label>
@@ -397,7 +342,7 @@ export default function DepthAnythingDashboard() {
                     type="checkbox"
                     checked={!!options.filter_black_bg}
                     onChange={e => setOptions(o => ({ ...o, filter_black_bg: e.target.checked }))}
-                    disabled={isUploading || isReconstructing}
+                    disabled={isUploading}
                   />
                   Filter Black Background
                 </label>
@@ -407,7 +352,7 @@ export default function DepthAnythingDashboard() {
                     type="checkbox"
                     checked={!!options.filter_white_bg}
                     onChange={e => setOptions(o => ({ ...o, filter_white_bg: e.target.checked }))}
-                    disabled={isUploading || isReconstructing}
+                    disabled={isUploading}
                   />
                   Filter White Background
                 </label>
@@ -425,21 +370,12 @@ export default function DepthAnythingDashboard() {
                       }))
                     }
                     className="w-full px-3 py-2 rounded-lg bg-bg-primary/40 border border-white/10 text-text-primary"
-                    disabled={isUploading || isReconstructing}
+                    disabled={isUploading}
                   >
                     <option value="low_res">low_res</option>
                     <option value="high_res">high_res</option>
                   </select>
                 </div>
-
-                <button
-                  type="button"
-                  className="btn btn-secondary w-full"
-                  onClick={handleReconstruct}
-                  disabled={isUploading || isReconstructing || !jobId}
-                >
-                  {isReconstructing ? 'Reconstructing...' : 'Reconstruct'}
-                </button>
               </div>
             </div>
           </div>
@@ -453,8 +389,12 @@ export default function DepthAnythingDashboard() {
                   <div className="px-4 py-3 border-b border-white/10 text-sm text-text-secondary">
                     RGB
                   </div>
-                  {rgbUrl ? (
-                    <img src={rgbUrl} alt="RGB" className="w-full object-contain" />
+                  {currentJob?.result?.rgbImage?.url ? (
+                    <img
+                      src={currentJob.result.rgbImage.url}
+                      alt="RGB"
+                      className="w-full object-contain"
+                    />
                   ) : (
                     <div className="p-8 text-sm text-text-muted">No RGB output yet.</div>
                   )}
@@ -464,18 +404,22 @@ export default function DepthAnythingDashboard() {
                   <div className="px-4 py-3 border-b border-white/10 text-sm text-text-secondary">
                     Depth
                   </div>
-                  {depthUrl ? (
-                    <img src={depthUrl} alt="Depth" className="w-full object-contain" />
+                  {currentJob?.result?.depthImage?.url ? (
+                    <img
+                      src={currentJob.result.depthImage.url}
+                      alt="Depth"
+                      className="w-full object-contain"
+                    />
                   ) : (
                     <div className="p-8 text-sm text-text-muted">No depth output yet.</div>
                   )}
                 </div>
               </div>
 
-              {model3dUrl && (
+              {currentJob?.result?.model3d?.url && (
                 <div className="mt-4">
                   <a
-                    href={model3dUrl}
+                    href={currentJob.result.model3d.url}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-sm text-neon-purple hover:underline"
@@ -488,9 +432,10 @@ export default function DepthAnythingDashboard() {
 
             <div className="bg-bg-primary/30 border border-white/5 rounded-xl p-5">
               <h2 className="text-lg font-semibold text-text-primary mb-3">Logs</h2>
-              <pre className="text-xs text-text-secondary whitespace-pre-wrap break-words bg-bg-secondary/40 border border-white/10 rounded-xl p-4 min-h-[140px]">
-                {log || 'No logs yet.'}
+              <pre className="text-xs text-text-secondary whitespace-pre-wrap break-words bg-bg-secondary/40 border border-white/10 rounded-xl p-4 min-h-[140px] max-h-[400px] overflow-y-auto">
+                {logs || 'No logs yet.'}
               </pre>
+              <div ref={logsEndRef} />
             </div>
           </div>
         </div>

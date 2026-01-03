@@ -1,0 +1,38 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": ["**/.env.*local"],
+  "pipeline": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "!.next/cache/**", "public/docs/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "lint": {
+      "outputs": []
+    },
+    "format": {
+      "outputs": []
+    },
+    "codegen": {
+      "outputs": ["src/generated/**"]
+    },
+    "da3:build": {
+      "outputs": ["app/da3-fastapi-setup/.dockerignore"],
+      "cache": false
+    },
+    "da3:up": {
+      "cache": false,
+      "persistent": true
+    },
+    "da3:down": {
+      "cache": false
+    },
+    "da3:logs": {
+      "cache": false,
+      "persistent": true
+    }
+  }
+}

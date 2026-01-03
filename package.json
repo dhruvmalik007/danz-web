@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "dev:turbo": "next dev --turbo",
+    "dev:turbo": "next dev --turbopack",
     "build": "npm run build:docs && next build",
     "build:next": "next build",
     "build:docs": "cd docs && npm install && npm run build && mkdir -p ../public/docs && cp -r .vitepress/dist/* ../public/docs/",
@@ -12,7 +12,13 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "codegen": "graphql-codegen --config codegen.ts"
+    "codegen": "graphql-codegen --config codegen.ts",
+    "da3:build": "cd app/da3-fastapi-setup && docker-compose build",
+    "da3:up": "cd app/da3-fastapi-setup && docker-compose up -d",
+    "da3:down": "cd app/da3-fastapi-setup && docker-compose down",
+    "da3:logs": "cd app/da3-fastapi-setup && docker-compose logs -f",
+    "da3:restart": "cd app/da3-fastapi-setup && docker-compose restart",
+    "da3:shell": "cd app/da3-fastapi-setup && docker-compose exec da3-api bash"
   },
   "dependencies": {
     "@apollo/client": "3.13.8",

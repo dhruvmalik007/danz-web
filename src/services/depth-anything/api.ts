@@ -1,40 +1,39 @@
 import axios from 'axios'
 
-export const DEPTH_ANYTHING_HF_ORIGIN = 'https://depth-anything-depth-anything-3.hf.space'
+export type JobStatus = 'queued' | 'processing' | 'completed' | 'failed'
 
-export type GradioFileData = {
-  path: string
-  url?: string | null
-  size?: number | null
-  orig_name?: string | null
-  mime_type?: string | null
-  is_stream?: boolean
-  meta?: {
-    _type: 'gradio.FileData'
-    [key: string]: unknown
+export type Job = {
+  job_id: string
+  status: JobStatus
+  progress: number
+  message: string
+  result?: {
+    output_dir: string
+    files: string[]
   }
+  error?: string
+  logs?: string[]
+  created_at: string
+  updated_at: string
 }
-
-export type GradioVideoData = {
-  video: GradioFileData
-  subtitles?: GradioFileData | null
-}
-
-export type GradioGalleryItem =
-  | {
-      image: GradioFileData
-      caption?: string | null
-    }
-  | {
-      video: GradioFileData
-      caption?: string | null
-    }
 
 export type DepthAnythingPrepareResponse = {
-  model3d: GradioFileData
-  targetDir: string
-  preview: GradioGalleryItem[]
-  log: string
+  job_id: string
+  status: JobStatus
+  message: string
+}
+
+export type DepthAnythingReconstructResponse = {
+  job_id: string
+  status: JobStatus
+  progress: number
+  message: string
+  result?: {
+    output_dir: string
+    files: string[]
+  }
+  error?: string
+  logs?: string[]
 }
 
 export type DepthAnythingReconstructOptions = {
@@ -49,23 +48,12 @@ export type DepthAnythingReconstructOptions = {
   gs_video_quality?: 'low' | 'medium' | 'high'
 }
 
-export type DepthAnythingReconstructResponse = {
-  model3d: GradioFileData
-  log: string
-  rgbImage: GradioFileData
-  depthImage: GradioFileData
-  message: string
-  view: string
-  video1: GradioVideoData
-  video2: GradioVideoData
-  message2: string
-}
-
 export const depthAnythingApi = {
   async prepare(params: {
     images: File[]
     video?: File | null
     samplingFps?: number
+    options?: DepthAnythingReconstructOptions
   }): Promise<DepthAnythingPrepareResponse> {
     const form = new FormData()
 
@@ -78,19 +66,28 @@ export const depthAnythingApi = {
     }
 
     form.append('samplingFps', String(params.samplingFps ?? 10))
+    form.append('showCam', String(params.options?.show_cam ?? true))
+    form.append('filterBlackBg', String(params.options?.filter_black_bg ?? false))
+    form.append('filterWhiteBg', String(params.options?.filter_white_bg ?? false))
+    form.append('processResMethod', params.options?.process_res_method ?? 'low_res')
+    form.append('savePercentage', String(params.options?.save_percentage ?? 10))
+    form.append('numMaxPoints', String(params.options?.num_max_points ?? 1000))
 
     const { data } = await axios.post('/api/depth-anything/upload', form)
     return data
   },
 
   async reconstruct(params: {
-    targetDir: string
-    options?: DepthAnythingReconstructOptions
+    job_id: string
   }): Promise<DepthAnythingReconstructResponse> {
     const { data } = await axios.post('/api/depth-anything/reconstruct', {
-      target_dir: params.targetDir,
-      ...(params.options ?? {}),
+      job_id: params.job_id,
     })
+    return data
+  },
+
+  async getJobStatus(jobId: string): Promise<Job> {
+    const { data } = await axios.get(`/api/da3/jobs/${jobId}`)
     return data
   },
 
